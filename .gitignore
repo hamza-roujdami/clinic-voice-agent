@@ -1,0 +1,40 @@
+# Dependencies
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Reference repos (not part of project)
+agent-framework/
+
+# Environment
+.env
+.env.local
+.env.azure
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+server.log
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Azure
+*.tfstate
+*.tfstate.backup
+azure-sdk-samples/
