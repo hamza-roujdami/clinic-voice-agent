@@ -16,6 +16,7 @@ from tools.scheduling import (
     cancel_appointment,
     get_appointment_history,
     add_to_waitlist,
+    send_sms_confirmation,
 )
 from tools.otp import (
     lookup_patient,
@@ -39,6 +40,7 @@ SCHEDULING_TOOLS = [
     cancel_appointment,
     get_appointment_history,
     add_to_waitlist,
+    send_sms_confirmation,
 ]
 HANDOFF_TOOLS = [initiate_human_transfer, get_transfer_status, get_queue_status]
 
@@ -51,6 +53,7 @@ __all__ = [
     "cancel_appointment",
     "get_appointment_history",
     "add_to_waitlist",
+    "send_sms_confirmation",
     "lookup_patient",
     "send_otp",
     "verify_otp",

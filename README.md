@@ -45,7 +45,7 @@ Audio Response
 │  │                                 │  │                                      │  │
 │  │  🔍 Bing Web Search             │  │  📝 MemorySearchTool                 │  │
 │  │  📄 Azure AI Search (RAG)       │  │     Patient preferences              │  │
-│  │  ⚡ 13 Function Tools           │  │     Long-term context                │  │
+│  │  ⚡ 14 Function Tools           │  │     Long-term context                │  │
 │  │     Identity / OTP              │  │                                      │  │
 │  │     Scheduling                  │  └──────────────────────────────────────┘  │
 │  │     Handoff                     │                                            │
@@ -93,7 +93,7 @@ Audio Response
 | | Managed Threads | Foundry Threads | Stateful multi-turn conversation management |
 | **Knowledge & Tools** | Web Search | WebSearchPreviewTool | Answer general questions (visiting hours, directions) |
 | | RAG | Azure AI Search | Policy and FAQ retrieval with citations |
-| | Function Tools | 13 custom tools | Identity, scheduling, handoff operations |
+| | Function Tools | 14 custom tools | Identity, scheduling, handoff, SMS confirmation |
 | **Foundry Memory** | Memory Store | MemorySearchTool | Store and retrieve long-term patient preferences |
 | **Foundry Observability** | Tracing | Azure Monitor | Request tracing and performance monitoring |
 | | Logging | App Insights | Agent execution logs and diagnostics |
@@ -107,52 +107,157 @@ Audio Response
 ## Prerequisites
 
 - Python 3.11+
-- Azure subscription.
+- Azure subscription with:
+  - Azure AI Foundry project (with gpt-4o-mini deployed)
+  - Azure Cosmos DB (optional - falls back to in-memory sessions)
 - Azure CLI (`az login` authenticated)
 
 ## Quick Start
 
+### 1. Clone and Install
+
 ```bash
-# 1. Setup
 git clone https://github.com/hamza-roujdami/clinic-voice-agent
 cd clinic-voice-agent
 
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+```
 
-# 2. Configure
+### 2. Configure Environment
+
+```bash
 cp .env.example .env
-# Edit .env with your Azure credentials
+```
 
-# 3. Deploy infrastructure
+Edit `.env` with your Azure credentials:
+
+```bash
+# Required - Azure AI Foundry
+PROJECT_ENDPOINT=https://your-resource.services.ai.azure.com/api/projects/your-project
+FOUNDRY_MODEL_PRIMARY=gpt-4o-mini
+
+# Optional - Session persistence (falls back to in-memory)
+COSMOS_ENDPOINT=https://your-cosmos.documents.azure.com:443/
+COSMOS_DATABASE=clinic-voice-agent
+COSMOS_CONTAINER=sessions
+```
+
+### 3. (Optional) Deploy Infrastructure
+
+If you need to create Azure resources:
+
+```bash
 cd infra/public
 ./deploy.sh rg-clinic-voice-agent swedencentral
+cd ../..
+```
 
-# 4. Run
+### 4. (Optional) Setup Foundry Memory
+
+For patient preference memory across sessions:
+
+```bash
+python scripts/setup_memory_store.py
+```
+
+### 5. Run the Server
+
+```bash
 python main.py
 ```
 
-## Testing Modes
+Server starts at http://localhost:8000
+
+## Testing
 
 ### Web UI
 Open http://localhost:8000 in your browser
 
 ### CLI Mode
 ```bash
-# Interactive CLI (connect to running server)
 python cli.py
-
 ```
 
-### Test Scenarios (Demo Patient: MRN-5050)
+### API (curl)
+```bash
+# Start a conversation
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Hello"}'
+
+# Continue with session_id from response
+curl -X POST http://localhost:8000/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "I need to see a cardiologist", "session_id": "<session_id>"}'
 ```
-1. "Hello, my MRN is MRN-5050"           → Patient lookup (Hamza El-Ghoujdami)
-2. "The code is 123456"                   → OTP verification
-3. "I need to see a cardiologist"         → Doctor search
-4. "Book Tuesday at 10am"                 → Appointment booking
-5. "What are the visiting hours?"         → Web search
-6. "I need to speak to someone"           → Human transfer
+
+---
+
+## Full Booking Flow (Demo)
+
+Test the complete appointment booking experience. Uses mock data - no real appointments created.
+
+**Demo Patient:** MRN-5050 (Hamza El-Ghoujdami)  
+**OTP Code:** 123456 (mock - always works)
+
 ```
+User: Hello
+Bot:  Hello, I can help you book, change, or cancel an appointment. 
+      What would you like to do?
+
+User: I need to see a cardiologist next week
+Bot:  Sure! Is this for you or someone else?
+
+User: For me
+Bot:  Got it! Which day works best for you next week?
+
+User: Tuesday would be great
+Bot:  I found two cardiologists at Heart Center on Floor 3:
+      1. Dr. Sarah Al-Mansoori
+      2. Dr. Yousef Qasim
+      Would you prefer to see Dr. Al-Mansoori or Dr. Qasim?
+
+User: Dr. Al-Mansoori please
+Bot:  I found several slots for Dr. Al-Mansoori on Tuesday:
+      1. 9:00 AM
+      2. 10:00 AM
+      3. 2:00 PM
+      Which time would work best for you?
+
+User: Tuesday afternoon
+Bot:  The next available slot in the afternoon is at 2:00 PM. 
+      Should I book that for you?
+
+User: Yes please
+Bot:  I'll need to verify your identity before booking. 
+      Could you please provide your MRN or phone number?
+
+User: My MRN is MRN-5050
+Bot:  Thanks Hamza. I've sent a 6-digit code to your phone ending in 2805. 
+      Please tell me the code when you receive it.
+
+User: The code is 123456
+Bot:  Done — your appointment is booked for Tuesday, February 14 at 2:00 PM 
+      with Dr. Sarah Al-Mansoori at Heart Center, Floor 3.
+      Would you like a text confirmation?
+
+User: Yes
+Bot:  Sent. Anything else I can help with?
+
+User: No that's all
+Bot:  You're welcome! Have a great day!
+```
+
+### Other Test Scenarios
+
+| Scenario | What to Say | Expected |
+|----------|-------------|----------|
+| Cancel appointment | "I want to cancel my appointment" | Asks which one, then verifies identity |
+| Reschedule | "I need to reschedule" | Asks for new date/time |
+| Human handoff | "Let me speak to a real person" | Initiates transfer with wait time |
+| Frustrated user | "This is frustrating, get me someone" | Escalates to human agent |
+| General question | "What are the visiting hours?" | Uses Bing search (no verification needed) |
 
 ## Project Structure
 
@@ -166,13 +271,15 @@ clinic-voice-agent/
 │   └── routes.py        # /chat, /session, /health endpoints
 ├── tools/               # Agent function tools
 │   ├── otp.py           # Patient lookup, OTP verification
-│   ├── scheduling.py    # Appointments, doctors, slots
+│   ├── scheduling.py    # Appointments, doctors, slots, SMS
 │   ├── handoff.py       # Human transfer
 │   ├── context.py       # Patient context injection
 │   └── decorator.py     # Tool registration decorator
 ├── sessions/            # Session management
 │   ├── manager.py       # SessionManager singleton
 │   └── cosmos_store.py  # Cosmos DB persistence
+├── scripts/             # Setup and utility scripts
+│   └── setup_memory_store.py  # Create Foundry Memory Store
 ├── tests/               # Integration tests
 ├── static/              # Web UI (index.html)
 ├── infra/               # Bicep IaC templates
@@ -182,71 +289,6 @@ clinic-voice-agent/
 └── requirements.txt
 ```
 
-## Environment Variables
-
-```bash
-# Required - Azure AI Foundry
-PROJECT_ENDPOINT=https://your-project.services.ai.azure.com/api/projects/your-project
-FOUNDRY_MODEL_PRIMARY=gpt-4o-mini
-
-# Required - Azure AI Search (for RAG)
-AZURE_SEARCH_ENDPOINT=https://your-search.search.windows.net
-
-# Optional - Session storage
-COSMOS_ENDPOINT=https://your-cosmos.documents.azure.com:443/
-COSMOS_DATABASE=enterprise_memory
-COSMOS_CONTAINER=sessions
-
-# Optional - Foundry Memory (for patient preferences)
-FOUNDRY_MEMORY_STORE_NAME=clinic-patient-memory
-```
-
-## System Components
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         Azure AI Foundry                             │
-│  ┌───────────────────────────────────────────────────────────────┐  │
-│  │                   clinic-voice-agent                           │  │
-│  │                                                                │  │
-│  │   ┌─────────────┐  ┌─────────────┐  ┌────────────────────┐    │  │
-│  │   │ gpt-4o-mini │  │ WebSearch   │  │ MemorySearchTool   │    │  │
-│  │   │   (LLM)     │  │ PreviewTool │  │ (patient context)  │    │  │
-│  │   └─────────────┘  └─────────────┘  └────────────────────┘    │  │
-│  │                                                                │  │
-│  │   ┌──────────────────────────────────────────────────────┐    │  │
-│  │   │              13 Function Tools                        │    │  │
-│  │   │  Identity: lookup_patient, send_otp, verify_otp       │    │  │
-│  │   │  Scheduling: search_doctors, check_availability,      │    │  │
-│  │   │              book/reschedule/cancel_appointment, ...   │    │  │
-│  │   │  Policy: search_policies    Handoff: human_transfer   │    │  │
-│  │   └──────────────────────────────────────────────────────┘    │  │
-│  └───────────────────────────────────────────────────────────────┘  │
-│                                                                      │
-│  ┌─────────────────────┐  ┌─────────────────────┐                   │
-│  │  Foundry Memory     │  │  Responses API      │                   │
-│  │  (patient prefs)    │  │  (conversation)     │                   │
-│  └─────────────────────┘  └─────────────────────┘                   │
-└─────────────────────────────────────────────────────────────────────┘
-                                   │
-                                   ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                         FastAPI Server                               │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────────┐  │
-│  │  POST /chat     │  │ Session Manager │  │ Web UI / CLI        │  │
-│  │  GET /health    │  │ (Cosmos DB)     │  │ localhost:8000      │  │
-│  └─────────────────┘  └─────────────────┘  └─────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────┘
-                                   │
-                                   ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                         Azure Services                               │
-│  ┌─────────────────────┐  ┌─────────────────────┐                   │
-│  │  Cosmos DB          │  │  AI Search          │                   │
-│  │  (sessions, 24h TTL)│  │  (policy RAG)       │                   │
-│  └─────────────────────┘  └─────────────────────┘                   │
-└─────────────────────────────────────────────────────────────────────┘
-```
 
 ### Data Flow
 

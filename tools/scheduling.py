@@ -209,3 +209,24 @@ def add_to_waitlist(
         f"  Preferred dates: {preferred_dates}\n"
         f"  We'll notify you when a slot opens up."
     )
+
+
+@tool(approval_mode="never_require")
+def send_sms_confirmation(
+    patient_phone: Annotated[str, "Patient phone number to send SMS to"],
+    appointment_id: Annotated[str, "Appointment confirmation ID"],
+    appointment_details: Annotated[str, "Appointment details: date, time, doctor, location"],
+) -> str:
+    """Send SMS confirmation to patient after booking an appointment.
+    
+    In production, this would integrate with an SMS gateway (e.g., Twilio, Azure Communication Services).
+    """
+    # Mock: In production, this would call SMS API
+    masked_phone = f"***-***-{patient_phone[-4:]}" if len(patient_phone) >= 4 else patient_phone
+    
+    return (
+        f"SMS confirmation sent successfully.\n"
+        f"  To: {masked_phone}\n"
+        f"  Confirmation: {appointment_id}\n"
+        f"  Message: Your appointment is confirmed - {appointment_details}"
+    )
