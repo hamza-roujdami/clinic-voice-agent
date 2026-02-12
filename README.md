@@ -87,7 +87,7 @@ Audio Response
 ## Tech Stack
 
 | Layer | Component | Technology | Purpose |
-|-------|-----------|------------|---------||
+|-------|-----------|------------|---------|
 | **Foundry Agent Service** | Agent SDK | `azure-ai-projects` | Create and run Foundry agents via Responses API |
 | | LLM | `gpt-4o-mini` | Conversation understanding and response generation |
 | | Managed Threads | Foundry Threads | Stateful multi-turn conversation management |
