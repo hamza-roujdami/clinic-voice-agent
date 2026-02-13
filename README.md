@@ -2,27 +2,19 @@
 
 AI-powered voice scheduling assistant for hospital call centers, built on **Microsoft Azure**.
 
-## Overview
+> **The Problem:** Hospital call centers handle thousands of routine scheduling calls daily—booking, rescheduling, and cancellations. Staff spend significant time on repetitive tasks while patients wait on hold. This solution automates ~80% of scheduling interactions, reducing wait times and freeing agents for complex cases.
 
-Voice scheduling system for telephony integration:
+## How It Works
 
-```
-PSTN Caller
-    ↓
-CCaaS Platform
-    ↓
-Voice Gateway
-    ↓
-Azure STT
-    ↓
-Foundry Agent
-    ↓
-Azure TTS
-    ↓
-Audio Response
-```
+1. **Patient calls** the hospital scheduling line via PSTN
+2. **Telephony platform** (CCaaS/PBX) routes audio to the Voice Gateway API
+3. **Azure Speech** converts speech to text in real-time
+4. **Foundry Agent** processes the request—verifies identity via OTP, searches for doctors, checks availability
+5. **Agent executes tools** to book/reschedule/cancel appointments, then confirms via SMS
+6. **Azure Speech** converts the response back to audio
+7. **Complex requests** seamlessly transfer to human agents with full context
 
-**Text interfaces** (Web UI / CLI) available for testing and development.
+The agent maintains conversation state across turns, remembers patient preferences, and answers policy questions using RAG with citations.
 
 ## Architecture
 
