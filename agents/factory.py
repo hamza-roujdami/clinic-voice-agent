@@ -1,30 +1,25 @@
-"""Agent Factory - Azure AI Foundry Agent Service v2
+"""
+Agent factory for clinic voice assistant.
 
-Creates and runs the clinic voice assistant agent using:
-- PromptAgentDefinition for agent configuration
-- OpenAI-compatible conversations/responses API
-- Local function tool execution
+Wraps Azure AI Foundry Agent Service v2 with local function tool execution.
+
+Architecture:
+    - Agent definition (prompt, tools) stored in Foundry Agent Service
+    - Conversations/responses managed via OpenAI-compatible API
+    - Function tools execute locally, results sent back to agent
+    - Built-in tools (WebSearch, MemorySearch) run server-side in Foundry
 
 Usage:
-    factory = AgentFactory()
-    async with factory:
-        result = await factory.run("I need an appointment", session_id="abc123")
-        print(result["response"])
-"""
-
+    async with AgentFactory() as factory:
+        result = await factory.run("I need an appointment", session_id="abc")
+"
 from __future__ import annotations
 
-# =============================================================================
-# IMPORTS
-# =============================================================================
-
-# Standard library
 import json
 import logging
 import os
 from typing import Any
 
-# Azure AI SDK
 from azure.ai.projects.aio import AIProjectClient
 from azure.ai.projects.models import (
     ApproximateLocation,
@@ -34,38 +29,27 @@ from azure.ai.projects.models import (
     WebSearchPreviewTool,
 )
 from azure.identity.aio import DefaultAzureCredential
-
-# OpenAI types
 from openai.types.responses.response_input_param import FunctionCallOutput
 
-# Local
 from agents.prompts import TRIAGE_SYSTEM_PROMPT
 from tools import HANDOFF_TOOLS, IDENTITY_TOOLS, SCHEDULING_TOOLS
 
-
-# =============================================================================
-# CONFIGURATION
-# =============================================================================
-
 logger = logging.getLogger(__name__)
-
 MEMORY_STORE_NAME = os.environ.get("FOUNDRY_MEMORY_STORE_NAME", "clinic-patient-memory")
 
 
-# =============================================================================
-# AGENT FACTORY
-# =============================================================================
-
-
 class AgentFactory:
-    """Clinic voice assistant agent using Foundry Agent Service v2."""
+    """
+    Creates and runs the clinic voice assistant via Foundry Agent Service.
+    
+    Lifecycle:
+        1. __aenter__: Connect to Foundry, register agent definition
+        2. run(): Process messages with tool loop
+        3. __aexit__: Cleanup connections
+    """
 
     AGENT_NAME = "clinic-voice-agent"
-    MAX_TOOL_ITERATIONS = 30
-
-    # -------------------------------------------------------------------------
-    # Initialization
-    # -------------------------------------------------------------------------
+    MAX_TOOL_ITERATIONS = 30  # Prevent infinite tool loops
 
     def __init__(
         self,
@@ -75,20 +59,13 @@ class AgentFactory:
         self._project_endpoint = project_endpoint or os.environ.get("PROJECT_ENDPOINT")
         self._model = model
 
-        # SDK clients
         self._credential: DefaultAzureCredential | None = None
         self._project_client: AIProjectClient | None = None
         self._openai_client = None
-
-        # Agent state
         self._agent_name: str | None = None
         self._agent_version: str | None = None
-
-        # Tools
         self._function_tools: list = []
         self._tool_lookup: dict[str, Any] = {}
-
-        # Sessions: session_id -> {conv_id, last_response_id}
         self._sessions: dict[str, dict[str, str]] = {}
 
     async def __aenter__(self):
@@ -109,17 +86,12 @@ class AgentFactory:
         return self
 
     async def __aexit__(self, *exc):
-        """Cleanup clients."""
         if self._openai_client:
             await self._openai_client.close()
         if self._project_client:
             await self._project_client.close()
         if self._credential:
             await self._credential.close()
-
-    # -------------------------------------------------------------------------
-    # Tools Setup
-    # -------------------------------------------------------------------------
 
     async def _setup_tools(self):
         """Prepare function tools for local execution."""
@@ -134,13 +106,12 @@ class AgentFactory:
             if hasattr(tool, "name") and hasattr(tool, "invoke")
         }
 
-        logger.info(f"Tools ready: {len(self._tool_lookup)} function tools")
+        logger.info(f"Loaded {len(self._tool_lookup)} tools")
 
     def _build_agent_tools(self) -> list:
-        """Build tool definitions for agent creation."""
+        """Build tool definitions for the agent."""
         tools = []
 
-        # Function tools
         for tool in self._function_tools:
             if hasattr(tool, "name") and hasattr(tool, "parameters"):
                 tools.append(
@@ -152,7 +123,7 @@ class AgentFactory:
                     )
                 )
 
-        # Web Search for clinic info (built-in, no connection required)
+        # WebSearch: UAE-localized results for clinic info queries
         tools.append(
             WebSearchPreviewTool(
                 user_location=ApproximateLocation(
@@ -162,27 +133,19 @@ class AgentFactory:
                 )
             )
         )
-        logger.info("Web Search enabled (UAE location)")
 
-        # Memory Search for long-term patient context
-        # Using threadId scope for per-conversation isolation (no cross-session leakage)
+        # MemorySearch: Long-term patient context (preferences, history)
+        # Scoped by threadId so conversations don't leak data
         if MEMORY_STORE_NAME:
             tools.append(
                 MemorySearchTool(
                     memory_store_name=MEMORY_STORE_NAME,
-                    # Use thread-based scope for conversation isolation
-                    # Each new conversation gets its own memory partition
                     scope="{{$threadId}}",
-                    update_delay=30,
+                    update_delay=30,  # Delay before indexing new content
                 )
             )
-            logger.info(f"Memory Search enabled: {MEMORY_STORE_NAME}")
 
         return tools
-
-    # -------------------------------------------------------------------------
-    # Agent Setup
-    # -------------------------------------------------------------------------
 
     async def _create_agent(self):
         """Create or update the agent in Foundry Agent Service."""
@@ -201,10 +164,6 @@ class AgentFactory:
         self._agent_name = agent.name
         self._agent_version = agent.version
         logger.info(f"Agent created: {self._agent_name} v{self._agent_version} ({len(tools)} tools)")
-
-    # -------------------------------------------------------------------------
-    # Tool Execution
-    # -------------------------------------------------------------------------
 
     async def _execute_tool(self, name: str, arguments: str) -> str:
         """Execute a function tool and return the result."""
@@ -225,10 +184,11 @@ class AgentFactory:
     async def _process_function_calls(
         self, response, tools_called: list[str]
     ) -> tuple[Any, bool]:
-        """Process function calls from agent response.
-
-        Returns:
-            (new_response, has_more_calls)
+        """
+        Execute function calls and continue the agent loop.
+        
+        The agent may request multiple tools in one turn. We execute all,
+        send results back, and check if agent needs more tools or is done.
         """
         function_calls = [
             item for item in response.output if item.type == "function_call"
@@ -250,7 +210,7 @@ class AgentFactory:
                 )
             )
 
-        # Send results back to agent
+        # Feed tool outputs back to agent for next reasoning step
         new_response = await self._openai_client.responses.create(
             input=outputs,
             previous_response_id=response.id,
@@ -258,10 +218,6 @@ class AgentFactory:
         )
 
         return new_response, True
-
-    # -------------------------------------------------------------------------
-    # Conversation Management
-    # -------------------------------------------------------------------------
 
     async def _get_or_create_conversation(
         self, session_id: str, message: str | None = None
@@ -278,10 +234,6 @@ class AgentFactory:
         self._sessions[session_id] = {"conv_id": conversation.id, "last_response_id": None}
         logger.info(f"Created conversation: {conversation.id}")
         return conversation.id
-
-    # -------------------------------------------------------------------------
-    # Public API
-    # -------------------------------------------------------------------------
 
     async def run(
         self,

@@ -1,17 +1,17 @@
-"""API Routes for Clinic Voice Agent.
+"""
+Chat and session management API for clinic voice agent.
 
 Endpoints:
-- POST /chat - Text-based chat (multi-turn via Responses API)
-- POST /voice/turn - Voice turn (Phase 2)
-- GET /session/{session_id} - Get session state
-- GET /sessions - List active sessions (admin)
+    POST /chat              Main chat endpoint - processes messages through Foundry agent
+    POST /voice/turn        Voice turn handling (Phase 2 - telephony integration)
+    GET  /session/{id}      Get session state (patient context, verification status)
+    GET  /session/{id}/history  Conversation history for debugging
+    DELETE /session/{id}    End session and cleanup
 """
-
 from __future__ import annotations
 
 import logging
 import uuid
-from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -23,24 +23,16 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-# ── Models ───────────────────────────────────────────────────────────────────
-
-
 class ChatRequest(BaseModel):
-    """Chat request model."""
     message: str
-    session_id: str | None = None
+    session_id: str | None = None  # Auto-generated if not provided
 
 
 class ChatResponse(BaseModel):
-    """Chat response model."""
     response: str
     session_id: str
-    agent: str | None = None
-    tools_called: list[str] = []
-
-
-# ── Endpoints ────────────────────────────────────────────────────────────────
+    agent: str | None = None       # For future multi-agent routing visibility
+    tools_called: list[str] = []   # Tools invoked during this turn (for debugging)
 
 
 def _get_sessions(req: Request) -> SessionManager:
@@ -53,37 +45,37 @@ def _get_sessions(req: Request) -> SessionManager:
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest, req: Request):
-    """Process a text chat message through the Foundry triage agent."""
+    """
+    Process a chat message through the Foundry triage agent.
+    
+    Flow:
+    1. Get or create session (Cosmos DB for prod, in-memory for dev)
+    2. Record user turn in conversation history
+    3. Pass conversation_id for multi-turn context (Foundry handles state)
+    4. Execute agent with tool loop until response
+    5. Cache verified patient info for session-level access
+    """
     factory = req.app.state.factory
     if factory is None:
-        raise HTTPException(status_code=503, detail="Agent factory not initialized. Check PROJECT_ENDPOINT.")
+        raise HTTPException(status_code=503, detail="Agent not initialized")
 
     sessions = _get_sessions(req)
     session_id = request.session_id or str(uuid.uuid4())
     message = request.message.strip()
     if not message:
-        raise HTTPException(status_code=400, detail="Message cannot be empty.")
+        raise HTTPException(status_code=400, detail="Message cannot be empty")
 
     try:
-        # Ensure session exists
         await sessions.get_or_create(session_id)
-        
-        # Record user turn
         await sessions.add_turn(session_id, "user", message)
         
-        # Set session context for tools
+        # Tools need session context for OTP state, patient lookup caching
         set_session_context(session_id)
         
-        # Get conversation_id for multi-turn (if continuing conversation)
+        # conversation_id enables multi-turn: Foundry maintains message history
         conversation_id = sessions.get_conversation_id(session_id)
+        logger.info(f"[{session_id}] {'Continuing' if conversation_id else 'New'}: {message[:80]}")
         
-        if conversation_id:
-            logger.info(f"[{session_id}] Continuing conversation: {message[:80]}")
-        else:
-            logger.info(f"[{session_id}] New session: {message[:80]}")
-        
-        # Run agent via factory.run()
-        # Pass session_id as primary key, conversation_id for multi-turn continuity
         result = await factory.run(
             message=message,
             session_id=session_id,
@@ -91,42 +83,33 @@ async def chat(request: ChatRequest, req: Request):
         )
         
         response_text = result["response"]
-        new_conversation_id = result["conversation_id"]
-        tools_called = result["tools_called"]
-        
-        # Save conversation_id for next turn
-        sessions.set_conversation_id(session_id, new_conversation_id)
-        
-        logger.info(f"[{session_id}] Agent response: {response_text[:120]}")
-        
-        # Record assistant turn
+        sessions.set_conversation_id(session_id, result["conversation_id"])
         await sessions.add_turn(session_id, "assistant", response_text)
         
-        # Check if patient was verified and update session context
+        # After OTP verification, cache patient info at session level
+        # so subsequent requests don't need re-verification
         verified_patient = get_last_verified_patient(session_id)
         if verified_patient:
             phone = verified_patient.get("phone", "")
-            phone_masked = phone[:5] + "****" + phone[-3:] if phone else ""
             await sessions.set_patient_context(
                 session_id,
                 mrn=verified_patient.get("mrn"),
                 name=verified_patient.get("name", ""),
-                phone_masked=phone_masked,
+                phone_masked=phone[:5] + "****" + phone[-3:] if phone else "",
                 dob=verified_patient.get("dob", ""),
                 verified=True,
             )
-            logger.info(f"[{session_id}] Patient context cached: {verified_patient.get('mrn')}")
         
         return ChatResponse(
             response=response_text,
             session_id=session_id,
             agent=None,
-            tools_called=tools_called,
+            tools_called=result["tools_called"],
         )
 
     except Exception as e:
-        logger.exception(f"[{session_id}] Error processing chat")
-        raise HTTPException(status_code=500, detail=f"Error processing message: {str(e)}")
+        logger.exception(f"[{session_id}] Chat error")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/voice/turn")
